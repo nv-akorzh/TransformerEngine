@@ -77,6 +77,10 @@ from ..export import is_in_onnx_export_mode, assert_warmed_up
 
 from ..cpp_extensions import (
     general_gemm,
+    ubx_request_allocator,
+    ubx_get_sym_tensor,
+    ubx_allreduce,
+    ubx_restore,
 )
 
 __all__ = ["LayerNormLinear"]
@@ -223,21 +227,36 @@ class _LayerNormLinear(torch.autograd.Function):
             and not custom  # TODO(negvet): and not FP8GlobalStateManager.get_fp8_recipe().custom()
         )
 
-        # Apply normalization
-        nvtx_range_push(f"{nvtx_label}.norm")
-        ln_out, mu, rsigma = apply_normalization(
-            inputmat,
-            None,  # ln_out
-            ln_weight,
-            ln_bias,
-            eps,
-            input_quantizer if with_quantized_norm else None,
-            inputmat.dtype,
-            normalization,
-            fwd_ln_sm_margin,
-            zero_centered_gamma,
-        )
-        nvtx_range_pop(f"{nvtx_label}.norm")
+        # Apply normalization (possibly fused with all-reduce for column parallel)
+        if (
+            symmetric_ar_type is not None
+            and symmetric_ar_type == "ubnext_add_rms"
+            and parallel_mode == "column"
+            and tp_size > 1
+        ):
+            assert normalization == "RMSNorm", "ubnext_add_rms is only supported for RMSNorm"
+            assert not with_quantized_norm, "ubnext_add_rms not implemented yet for quantized norm"
+            assert zero_centered_gamma is False, "ubnext_add_rms is not supported for zero_centered_gamma"
+            assert ln_bias is None, "ubnext_add_rms is not supported for ln_bias"
+            inputmat = ubx_restore(inputmat, tp_group)
+            ln_out = ubx_allreduce(inputmat, gamma=ln_weight, eps=eps)
+            mu = None
+            rsigma = None
+        else:
+            nvtx_range_push(f"{nvtx_label}.norm")
+            ln_out, mu, rsigma = apply_normalization(
+                inputmat,
+                None,  # ln_out
+                ln_weight,
+                ln_bias,
+                eps,
+                input_quantizer if with_quantized_norm else None,
+                inputmat.dtype,
+                normalization,
+                fwd_ln_sm_margin,
+                zero_centered_gamma,
+            )
+            nvtx_range_pop(f"{nvtx_label}.norm")
 
         # Store unquantized layer norm output if we need to return it
         ln_out_return = None
@@ -362,6 +381,21 @@ class _LayerNormLinear(torch.autograd.Function):
             out_shape[-1] = out_features
             reduce_scatter_out = torch.empty(out_shape, dtype=activation_dtype, device=inp.device)
 
+        symm_out = None
+        if (
+            symmetric_ar_type is not None
+            and symmetric_ar_type.startswith("ubnext")
+            and parallel_mode == "row"
+            and tp_size > 1
+        ):
+            out_shape_list = list(tuple(inp.shape))
+            out_shape_list[-1] = out_features
+            symm_out = ubx_get_sym_tensor(
+                torch.Size(out_shape_list),
+                activation_dtype,
+                tp_group,
+            )
+
         # ------------------------------------------------------
         # Forward GEMM
         # Note: y = x * w^T
@@ -377,6 +411,7 @@ class _LayerNormLinear(torch.autograd.Function):
             ub=ub_obj,
             ub_type=ub_type,
             extra_output=reduce_scatter_out,
+            out=symm_out,
         )
         nvtx_range_pop(f"{nvtx_label}.gemm")
         # ------------------------------------------------------
@@ -405,7 +440,17 @@ class _LayerNormLinear(torch.autograd.Function):
                 out, _ = reduce_scatter_along_first_dim(out, tp_group)
             elif tensor_parallel:
                 if symmetric_ar_type is not None:
-                    out, _ = symmetric_all_reduce(out, tp_group, all_reduce_type=symmetric_ar_type)
+                    if symm_out is not None:
+                        out = ubx_allreduce(symm_out)
+                    else:
+                        fallback_symmetric = (
+                            "multimem_all_reduce"
+                            if symmetric_ar_type.startswith("ubnext")
+                            else symmetric_ar_type
+                        )
+                        out, _ = symmetric_all_reduce(
+                            out, tp_group, all_reduce_type=fallback_symmetric
+                        )
                 else:
                     out, _ = allreduce(out, tp_group)
             nvtx_range_pop(f"{nvtx_label}.row_parallel_comm")
@@ -1301,6 +1346,19 @@ class LayerNormLinear(TransformerEngineBaseModule):
                 7,
                 0,
             ), "Torch version must be at least 2.7 to use symmetric memory"
+            if (
+                self.symmetric_ar_type.startswith("ubnext")
+                and parallel_mode == "row"
+                and tp_size > 1
+            ):
+                ubx_request_allocator(
+                    self.tp_group,
+                    (
+                        int(os.environ.get("NVTE_UB_MAXBATCH", 64)),
+                        self.out_features,
+                    ),
+                    params_dtype,
+                )
 
         self.eps = eps
         layer_norm_weight = torch.nn.Parameter(
