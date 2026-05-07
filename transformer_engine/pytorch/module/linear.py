@@ -352,7 +352,7 @@ class _Linear(torch.autograd.Function):
             )
             assert symm_out is not None or symmetric_ar_type == "ubnext", (
                 "No symmetric pool out of space fallback for fused ops, increase"
-                " NVTE_UB_SYMM_POOL_SIZE"
+                " UBX_SYMM_POOL_SIZE"
             )
 
         # ------------------------------------------------------

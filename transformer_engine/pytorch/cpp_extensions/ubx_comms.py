@@ -1,12 +1,12 @@
-"""Thin re-exports from caliperlib.ubnext (UB-X).
+"""Thin re-exports from ubx (UB-X).
 
-All allocator, tensor, and collective implementations live in the caliperlib
+All allocator, tensor, and collective implementations live in the ubx
 package (ub-x).  This module re-exports them under the names that TE's linear
 and layernorm_linear modules expect.
 """
 
-from caliperlib.ubnext import SymmAllocator, SymmTensor
-from caliperlib.ubnext.ops import (
+from ubx import SymmAllocator, SymmTensor
+from ubx.ops import (
     request_allocator as ubx_request_allocator,
     get_sym_tensor as ubx_get_sym_tensor,
     allreduce as ubx_allreduce,

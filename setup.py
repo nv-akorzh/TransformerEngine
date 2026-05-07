@@ -104,7 +104,7 @@ def setup_requirements() -> Tuple[List[str], List[str]]:
         "pydantic",
         "importlib-metadata>=1.0",
         "packaging",
-        "caliperlib>=0.1.0",
+        "ubx>=1.0.0",
     ]
     test_reqs: List[str] = ["pytest>=8.2.1"]
 
