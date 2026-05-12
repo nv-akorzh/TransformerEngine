@@ -230,14 +230,14 @@ class _LayerNormLinear(torch.autograd.Function):
         # Apply normalization (possibly fused with all-reduce for column parallel)
         if (
             symmetric_ar_type is not None
-            and symmetric_ar_type == "ubnext_add_rms"
+            and symmetric_ar_type == "ubx_add_rms"
             and parallel_mode == "column"
             and tp_size > 1
         ):
-            assert normalization == "RMSNorm", "ubnext_add_rms is only supported for RMSNorm"
-            assert not with_quantized_norm, "ubnext_add_rms not implemented yet for quantized norm"
-            assert zero_centered_gamma is False, "ubnext_add_rms is not supported for zero_centered_gamma"
-            assert ln_bias is None, "ubnext_add_rms is not supported for ln_bias"
+            assert normalization == "RMSNorm", "ubx_add_rms is only supported for RMSNorm"
+            assert not with_quantized_norm, "ubx_add_rms not implemented yet for quantized norm"
+            assert zero_centered_gamma is False, "ubx_add_rms is not supported for zero_centered_gamma"
+            assert ln_bias is None, "ubx_add_rms is not supported for ln_bias"
             inputmat = ubx_restore(inputmat, tp_group)
             ln_out = ubx_allreduce(inputmat, gamma=ln_weight, eps=eps)
             mu = None
@@ -384,7 +384,7 @@ class _LayerNormLinear(torch.autograd.Function):
         symm_out = None
         if (
             symmetric_ar_type is not None
-            and symmetric_ar_type.startswith("ubnext")
+            and symmetric_ar_type.startswith("ubx")
             and parallel_mode == "row"
             and tp_size > 1
         ):
@@ -445,7 +445,7 @@ class _LayerNormLinear(torch.autograd.Function):
                     else:
                         fallback_symmetric = (
                             "multimem_all_reduce"
-                            if symmetric_ar_type.startswith("ubnext")
+                            if symmetric_ar_type.startswith("ubx")
                             else symmetric_ar_type
                         )
                         out, _ = symmetric_all_reduce(
@@ -1347,7 +1347,7 @@ class LayerNormLinear(TransformerEngineBaseModule):
                 0,
             ), "Torch version must be at least 2.7 to use symmetric memory"
             if (
-                self.symmetric_ar_type.startswith("ubnext")
+                self.symmetric_ar_type.startswith("ubx")
                 and parallel_mode == "row"
                 and tp_size > 1
             ):

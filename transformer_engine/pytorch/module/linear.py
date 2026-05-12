@@ -339,7 +339,7 @@ class _Linear(torch.autograd.Function):
         symm_out = None
         if (
             symmetric_ar_type is not None
-            and symmetric_ar_type.startswith("ubnext")
+            and symmetric_ar_type.startswith("ubx")
             and parallel_mode == "row"
             and tp_size > 1
         ):
@@ -350,7 +350,7 @@ class _Linear(torch.autograd.Function):
                 activation_dtype,
                 tp_group,
             )
-            assert symm_out is not None or symmetric_ar_type == "ubnext", (
+            assert symm_out is not None or symmetric_ar_type == "ubx", (
                 "No symmetric pool out of space fallback for fused ops, increase"
                 " UBX_SYMM_POOL_SIZE"
             )
@@ -399,14 +399,14 @@ class _Linear(torch.autograd.Function):
             elif tensor_parallel:
                 if symmetric_ar_type is not None:
                     if symm_out is not None:
-                        if symmetric_ar_type == "ubnext":
+                        if symmetric_ar_type == "ubx":
                             out = ubx_allreduce(symm_out)
                         else:
                             out = symm_out
                     else:
                         fallback_symmetric = (
                             "multimem_all_reduce"
-                            if symmetric_ar_type.startswith("ubnext")
+                            if symmetric_ar_type.startswith("ubx")
                             else symmetric_ar_type
                         )
                         out, _ = symmetric_all_reduce(
@@ -1270,7 +1270,7 @@ class Linear(TransformerEngineBaseModule):
                 0,
             ), "Torch version must be at least 2.7 to use symmetric memory"
             if (
-                self.symmetric_ar_type.startswith("ubnext")
+                self.symmetric_ar_type.startswith("ubx")
                 and parallel_mode == "row"
                 and tp_size > 1
             ):
